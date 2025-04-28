@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from scipy.signal import resample
 
-cable_length = 10
+cable_length = 100
 high_sample_freq=500e6
 nyquist_freq = 62.5 * 1e6
 
@@ -71,8 +71,8 @@ def fir_filter(fir_taps, signals):
 # GENERATE TAPS
 #######################
 fir_taps = gen_taps(cable_length=cable_length, num_taps=9, fir_type=1)
-fir_taps = np.array([0.0014,-1.0601, 3.658, -1.0604]) / 5.7
-print(fir_taps)
+fir_taps = np.array([-0.1002,-0.6199, 0.7888,-5.8325,13.2606,-5.6888])
+# print(fir_taps)
 
 #######################
 # VISUALIZE FREQ RESP
@@ -168,7 +168,6 @@ orig_amplitudes = np.array([np.max(np.abs(sig)) for sig in signals])
 filtered_amplitudes = np.array([np.max(np.abs(sig[0:])) for sig in filtered_signals])
 filtered_q_amplitudes = np.array([np.max(np.abs(sig[0:])) for sig in filtered_signals_q])
 filtered_special_amplitudes = np.array([np.max(np.abs(sig[300:])) for sig in special_fsig])
-print("max is", np.max(filtered_q_amplitudes))
 # print(filtered_special_amplitudes)
 # for i in range(len(filtered_signals)):
 #     sig = filtered_signals[i]

@@ -30,6 +30,11 @@ Author: ChatGPT (April 2025) (and Richard)
 import numpy as np
 import matplotlib.pyplot as plt
 import fir
+import torch
+import torch.nn.functional as F
+import scipy.signal as signal
+
+np.set_printoptions(precision=4, suppress=True)
 
 ###############################################################################
 # Scrambler / Descrambler (x¹¹ + x⁹ + 1) – specified in IEEE 802.3‑2005 40.6.1
@@ -143,7 +148,9 @@ class Tx1000BaseT:
         up[::self.sps] = symbols
 
         # Convolve with SRRC pulse
-        waveform = np.convolve(up, self.rrc, mode="full")
+        # waveform = np.convolve(up, self.rrc, mode="full")
+        waveform = np.convolve(up, self.rrc, mode="same")
+
         return waveform, len(symbols)
 
 
@@ -162,10 +169,11 @@ class Rx1000BaseT:
     def receive(self, waveform, n_syms):
         """Recover **n_bits = n_syms × 2** descrambled bits from waveform."""
         # Matched filter
-        y = np.convolve(waveform, self.rrc[::-1], mode="full")
+        # y = np.convolve(waveform, self.rrc[::-1], mode="full")
+        y = np.convolve(waveform, self.rrc[::-1], mode="same")
 
         # Symbol‑spaced sampling (account for filter delay)
-        delay  = len(self.rrc) - 1
+        delay  = 0 # len(self.rrc) - 1
         idx    = np.arange(delay, delay + n_syms * self.sps, self.sps)
         slices = y[idx] / self.scale
 
@@ -183,15 +191,11 @@ class Rx1000BaseT:
 # Quick self‑test / demonstration
 ###############################################################################
 
-def adaptive_ffe(rx_signal, tx_symbols, taps=8, mu=0.01, n_iters=1, init_w=None):
+def adaptive_ffe(rx_signal, tx_symbols, taps=8, mu=0.01, n_iters=1):
     """LMS equalizer."""
-    if init_w is None:
-        w = np.zeros(taps)
-        w[taps//2] = 1.0  # start with middle tap active
-    else:
-        w = init_w[:]
+    w = np.zeros(taps)
+    # w[(taps - 1)//2] = 1.0
     x = np.zeros(taps)
-    y_out = []
     for _ in range(5 if mu > 0 else 1):
       for _ in range(n_iters):
           for i in range(len(rx_signal)):
@@ -201,121 +205,139 @@ def adaptive_ffe(rx_signal, tx_symbols, taps=8, mu=0.01, n_iters=1, init_w=None)
               d = tx_symbols[i] if i < len(tx_symbols) else 0
               e = d - y
               w = w + mu * e * x  # LMS update
-              y_out.append(y)
       mu *= 0.1
-    return np.array(y_out), w
+    return w
+
 
 def debug(label, arr):
     print(label, arr[:20], np.min(arr), np.max(arr))
 
+def sanity(rx, tx):
+    bits_tx        = np.random.default_rng().integers(0, 2, 100_000).tolist()
+    wave, n_syms   = tx.transmit(bits_tx)
+
+    lowpass_taps = signal.firwin2(5, [0, 46/62.5, 49/62.5, 1], [1, 1, 0, 0], fs=2.0, antisymmetric=False)
+    lowpass_delay = (len(lowpass_taps) - 1) // 2
+    wave_ = signal.lfilter(lowpass_taps, 1.0, wave)[lowpass_delay:]
+    wave = wave_ * np.max(np.abs(wave)) / np.max(np.abs(wave_))
+
+    print(len(bits_tx), len(wave))
+    bits_rx        = rx.receive(wave, n_syms - lowpass_delay)
+
+    ber = np.mean(np.not_equal(bits_tx[:-lowpass_delay * 2], bits_rx))
+    print("BER =", ber)          # prints 0.0
+    exit()
+
 if __name__ == "__main__":
     N_BITS = 10_000
+    SPS = 1
     rng    = np.random.default_rng(seed=42)
-    tx     = Tx1000BaseT(sps=1)
-    rx     = Rx1000BaseT(sps=1)
+    tx     = Tx1000BaseT(sps=SPS, span=6)
+    rx     = Rx1000BaseT(sps=SPS, span=6)
+    # sanity(rx, tx)
 
-    np.set_printoptions(precision=4, suppress=True)
 
+    # ----- generate signal and transmit waveform----------------------------------
     bits_tx       = rng.integers(0, 2, N_BITS).tolist()
-    # bits_tx       = np.zeros(N_BITS, dtype=int)
-    # bits_tx[::2] = 1
-    # bits_tx = bits_tx.tolist()
-    debug("tx", bits_tx)
-    debug("tx", bits_tx[-20:])
     waveform, Ns  = tx.transmit(bits_tx)
-    debug("waveform", waveform)
 
-    plt.figure(figsize=(15, 5))
-    plt.plot(waveform[:100])
-    plt.plot(bits_tx[:100])
-    plt.savefig("test4.png")
-
-    # waveform = waveform[1::2]
-
-    max_amp = np.max(np.abs(waveform))
-    channel_rx = fir.simulate_channel(waveform, cable_length=100)
+    # ----- pass through channel --------------------------------------------------
+    channel_rx = fir.simulate_channel(waveform, freq=125e6*SPS, cable_length=100)
+    # channel_rx = waveform
+    # channel_rx = channel_rx[1::4]
     debug("channel", channel_rx)
 
-    
+    # ----- low pass filter to eliminate isi --------------------------------------
 
+    # vvv this enables isi elimination
+    lowpass_taps = signal.firwin2(7, [0, 45/62.5, 50/62.5, 1], [1, 1, 0, 0], fs=2.0, antisymmetric=False)
+    # vvv this disables isi elimination but keeps the delay
+    # lowpass_taps = [0, 1, 0]
 
-    # taps = fir.gen_taps(cable_length=10, num_taps=9, fir_type=1)
-    # # taps = fir.gen_taps(cable_length=1, num_taps=8, fir_type=4)
-    # # taps = np.array([0, 0, 0, 1, 0, 0, 0, 0])
-    # equalized_rx = fir.manual_filter(taps, channel_tx / max_amp)
-    # equalized_rx *= (max_amp / np.max(np.abs(equalized_rx)))
-    # equalized_rx = equalized_rx[1:]
-    # debug("equalized", equalized_rx)
+    lowpass_delay = (len(lowpass_taps) - 1) // 2
+    channel_rx_ = signal.lfilter(lowpass_taps, 1.0, channel_rx)[lowpass_delay:]
+    channel_rx = channel_rx_ * np.max(np.abs(channel_rx)) / np.max(np.abs(channel_rx_))
 
-    delay = 1
-    num_taps = 8
+    # ----- normalize tx & rx waveform to -1~1 to simulate adc --------------------
+    channel_rx = channel_rx / np.max(np.abs(channel_rx))
+    waveform_factor = np.max(np.abs(waveform))
+    normalized_waveform = waveform / waveform_factor
 
+    #####################
+    # FILTER TRAINING
+    #####################
     def train(delay, num_taps, channel_rx, waveform):
-      _, taps = adaptive_ffe(channel_rx[delay:], waveform[:-delay], taps=num_taps, n_iters=2, mu=0.04)
-      equalized_rx, taps = adaptive_ffe(channel_rx, waveform, taps=num_taps, n_iters=1, mu=0, init_w=taps)
-      return equalized_rx[delay:], taps
+        # taps = adaptive_ffe_torch(channel_rx[delay:], waveform[:-delay], taps=num_taps, n_iters=100, mu=1e-3)
+        taps = adaptive_ffe(channel_rx[delay:], waveform[:-delay], taps=num_taps, n_iters=2, mu=0.03)
+        max_tap = np.max(np.abs(taps))
+        return taps / max_tap, max_tap
 
-    min_taps = 4
+    def eval_(taps, channel_rx):
+        padded_rx = np.hstack([[0] * (len(taps) - 1), channel_rx])
+        return np.convolve(channel_rx, taps, mode='same')
+        # x = np.zeros_like(taps)
+        # w = taps
+        # y_out = []
+        # for i in range(len(channel_rx)):
+        #     x = np.roll(x, -1)
+        #     x[-1] = channel_rx[i]
+        #     y = np.dot(w, x)
+        #     y_out.append(y)
+        # return np.array(y_out)
+
+    #####################
+    # SWEEP
+    #####################
+    min_taps = 3
     max_taps = 8
-    results = np.zeros((5, max_taps + 1))
-    final_taps = None
-    for delay in range(1,4):
-      for ntaps in range(min_taps, max_taps + 1):
-        equalized_rx, taps = train(delay, ntaps, channel_rx, waveform)
-        bits_rx       = rx.receive(equalized_rx, Ns)
-        ber           = np.mean(np.not_equal(bits_tx, bits_rx))
-        print(f"ber[{delay}][{ntaps}] = {ber}")
-        results[delay][ntaps] = ber
-        if delay == 1 and ntaps == 4:
-          final_taps = taps
+    max_delay = 4
 
-    # baseline
-    equalized_rx = channel_rx
-    bits_rx      = rx.receive(equalized_rx, Ns)
-    ber          = np.mean(np.not_equal(bits_tx, bits_rx))
+    results = np.zeros((max_delay + 1, max_taps + 1)) + 0.5
+    final_taps = None
+    for delay in range(1, max_delay + 1):
+        for ntaps in range(max(min_taps, delay * 2), max_taps + 1):
+            taps, filter_factor = train(delay, ntaps, channel_rx, normalized_waveform[:-lowpass_delay])
+            actual_delay      = max(0, int(ntaps // 2) - delay)
+            equalized_rx      = eval_(taps, channel_rx)[actual_delay:]
+            actual_delay      += lowpass_delay
+            # equalized_rx      = eval_(taps, channel_rx)[delay:]
+            bits_rx           = rx.receive(equalized_rx * waveform_factor * filter_factor, Ns - actual_delay)
+            ber               = np.mean(np.not_equal(
+                bits_tx[:-actual_delay*2] if actual_delay else bits_tx[:], 
+                bits_rx[:]))
+            print("weights:", ", ".join([f"{t:.3}" for t in taps]))
+            print(f"ber[{delay}][{ntaps}] = {ber}")
+            results[delay][ntaps] = ber
+            if delay == 1 and ntaps == 6:
+                final_taps = taps
+
+    #####################
+    # BASELINE
+    #####################
+    equalized_rx = channel_rx * waveform_factor
+    bits_rx      = rx.receive(equalized_rx, Ns - lowpass_delay)
+    ber          = np.mean(np.not_equal(bits_tx[:-lowpass_delay * 2], bits_rx))
     print(f"baseline ber = {ber}")
 
 
     print(final_taps)
-    
-    # shmoo plot of results
+
+    #####################
+    # SHMOOOO
+    #####################
     plt.figure(figsize=(16, 12))
     plt.imshow(results[:, min_taps:], origin='lower', cmap='viridis', aspect='auto', 
                extent=[min_taps - 0.5, results.shape[1] - 0.5, -0.5, results.shape[0] - 0.5])
     plt.colorbar(label='Result Value')
     plt.xlabel('num taps')
     plt.ylabel('delay')
-    plt.title('Schmoo Plot')
+    plt.title('Shmoo Plot')
 
     nrows, ncols = results.shape
     print(nrows, ncols)
     for i in range(nrows):
-      for j in range(ncols):
-        plt.text(j, i, f"{results[i, j]:.4f}", color='white', ha='center', va='center', fontsize=18)
+        for j in range(ncols):
+            plt.text(j, i, f"{results[i, j]:.4f}", color='white', ha='center', va='center', fontsize=18)
 
 
-    plt.savefig("schmoo.png")
-
-
-
-
-    print("taps", taps)
-    # debug("equalized", equalized_rx)
-
-
-
-    # bits_rx       = rx.receive(waveform, Ns)
-    # bits_rx       = rx.receive(channel_tx, Ns)
-    bits_rx       = rx.receive(equalized_rx[:], Ns)
-
-    debug("rx", bits_rx)
-    debug("rx", bits_rx[-20:])
-
-    for offset in range(14):
-      if offset > 0:
-        ber = np.mean(np.not_equal(bits_tx[:-offset], bits_rx[offset:]))
-      else:
-        ber = np.mean(np.not_equal(bits_tx, bits_rx))
-
-      print(f"Simulated {N_BITS} bits – BER = {ber * 100}%")
-
+    plt.savefig("shmoo.png")
