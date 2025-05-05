@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 import scipy.signal as signal
 
-np.set_printoptions(precision=4, suppress=True)
+np.set_printoptions(precision=6, suppress=True)
 levels = np.array([-2, -1, 0, 1, 2])
 
 #####################
@@ -52,18 +52,18 @@ def sweep_test():
         print(label, arr[:20], np.min(arr), np.max(arr))
 
     # ----- generate some symbols -------------------------------------------------
-    N_BITS = 10_000
+    N_BITS = 100_000
     rng = np.random.default_rng(seed=42)
     bits_tx = rng.integers(-2, 3, N_BITS).tolist()
 
     # ----- pass through channel --------------------------------------------------
     waveform = np.array(bits_tx, dtype="float")
-    channel_rx = fir.simulate_channel(waveform, freq=125e6, cable_length=100)
+    channel_rx = fir.simulate_channel(waveform, freq=125e6, cable_length=200)
     # debug("channel", channel_rx)
 
     # ----- normalize tx & rx waveform to -1~1 to simulate adc --------------------
     channel_rx = channel_rx / np.max(np.abs(channel_rx))
-    waveform_factor = np.max(np.abs(waveform))
+    waveform_factor = np.max(np.abs(waveform)) # = 2
     normalized_waveform = waveform / waveform_factor
 
     # ----- calculate error rate for unequalized baseline -------------------------
@@ -73,10 +73,11 @@ def sweep_test():
     print(f"baseline ber\t= {baseline_ber}")
 
     # ----- sweep different number of taps and delays -----------------------------
-    min_taps = 3
-    max_taps = 8
+    min_taps = 4
+    max_taps = 9
     max_delay = 4
 
+    results = np.zeros((max_delay + 1, max_taps + 1)) + 1
     for delay in range(1, max_delay + 1):
         for ntaps in range(max(min_taps, delay * 2), max_taps + 1):
             actual_delay       = max(0, int(ntaps // 2) - delay)
@@ -92,7 +93,25 @@ def sweep_test():
                                      bits_rx[:]))
 
             print(f"taps[{delay}][{ntaps}]\t=", ", ".join([f"{t:.3}" for t in taps]))
-            print(f"ber[{delay}][{ntaps}]\t= {ber}")
+            print(f"ber[{delay}][{ntaps}]\t= {ber:.5f}")
+            results[delay][ntaps] = np.log2(ber) if ber else -10
+
+    plt.figure(figsize=(16, 12))
+    plt.imshow(results[:, min_taps:], origin='lower', cmap='viridis', aspect='auto', 
+               extent=[min_taps - 0.5, results.shape[1] - 0.5, -0.5, results.shape[0] - 0.5])
+    plt.colorbar(label='Result Value')
+    plt.xlabel('num taps')
+    plt.ylabel('delay')
+    plt.title('Shmoo Plot of log2(BER)')
+
+    nrows, ncols = results.shape
+    print(nrows, ncols)
+    for i in range(nrows):
+        for j in range(ncols):
+            plt.text(j, i, f"{results[i, j]:.5f}", color='white', ha='center', va='center', fontsize=18)
+
+
+    plt.savefig("shmoo.png")
 
 if __name__ == "__main__":
     sweep_test()
