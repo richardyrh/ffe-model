@@ -67,17 +67,35 @@ def fir_filter_all(fir_taps, signals):
 def fir_filter(fir_taps, signals):
   return signal.lfilter(fir_taps, 1.0, signals)
 
-#######################
-# GENERATE TAPS
-#######################
-fir_taps = gen_taps(cable_length=cable_length, num_taps=9, fir_type=1)
-fir_taps = np.array([-0.1002,-0.6199, 0.7888,-5.8325,13.2606,-5.6888])
-# print(fir_taps)
+# manual filter
+def manual_filter(taps, sig):
+  taps = np.asarray(taps)
+  sig = np.asarray(sig)
+  return np.convolve(sig, taps, mode='full')[:len(sig)]
+
+def manual_filter_q(taps, sig):
+  taps = np.asarray(taps)
+  sig = np.asarray(sig)
+  fir_taps_q = quantize(taps)
+  sig_q = quantize(sig)
+  return manual_filter(fir_taps_q, sig_q) / 128 / 128
+
+
+def quantize(x):
+  return np.clip(np.round(x * 128), -128, 127)
+
 
 #######################
 # VISUALIZE FREQ RESP
 #######################
 if __name__ == "__main__":
+  #######################
+  # GENERATE TAPS
+  #######################
+  fir_taps = gen_taps(cable_length=cable_length, num_taps=9, fir_type=1)
+  fir_taps = np.array([-0.1002,-0.6199, 0.7888,-5.8325,13.2606,-5.6888])
+  # print(fir_taps)
+
   freq_response, response = signal.freqz(fir_taps, whole=True) # 8000)
   # freq_response, response = signal.freqz(fir_taps, worN=8000)
   response_phase = np.unwrap(np.angle(response))
@@ -96,35 +114,33 @@ if __name__ == "__main__":
   taps_quantized = np.clip(np.round(fir_taps * 128), -128, 127).astype(np.int8)
   print("taps_quantized\n", taps_quantized)
 
-#######################
-# SIMULATE FREQS
-#######################
-
-n_cycles = 100  # Number of sine cycles per test
-
-sim_freqs = np.linspace(1, 124, 200)
-# sim_freqs = np.arange(62.5, 63.5, 1)
-
-# Generate original signals with respective attenuations
-orig_signals = [
-    np.sin(2 * np.pi * freq_MHz_test * 1e6 * np.arange(0, (n_cycles / (freq_MHz_test * 1e6)), 1/high_sample_freq))
-    for freq_MHz_test in sim_freqs
-]
-freq_MHz = np.array([1, 4, 8, 10, 16, 20, 25, 31.25, 62.5, 100, 200, 250])
-attenuation_dB = np.array([2.0, 3.8, 5.3, 6.0, 7.6, 8.5, 9.5, 10.7, 15.4, 19.8, 29.0, 32.8])
-interp_atten = interp1d(freq_MHz, attenuation_dB, kind="linear")
-high_freq_signals = [
-    simulate_channel(sig, cable_length=cable_length)
-    for sig in orig_signals
-]
-signals = [
-    downsample(sig)
-    for sig in high_freq_signals
-]
-# Apply FIR filter
-filtered_signals = np.array([signal.lfilter(fir_taps, 1.0, sig) for sig in signals])
-
-
+  #######################
+  # SIMULATE FREQS
+  #######################
+  
+  n_cycles = 100  # Number of sine cycles per test
+  
+  sim_freqs = np.linspace(1, 124, 200)
+  # sim_freqs = np.arange(62.5, 63.5, 1)
+  
+  # Generate original signals with respective attenuations
+  orig_signals = [
+      np.sin(2 * np.pi * freq_MHz_test * 1e6 * np.arange(0, (n_cycles / (freq_MHz_test * 1e6)), 1/high_sample_freq))
+      for freq_MHz_test in sim_freqs
+  ]
+  freq_MHz = np.array([1, 4, 8, 10, 16, 20, 25, 31.25, 62.5, 100, 200, 250])
+  attenuation_dB = np.array([2.0, 3.8, 5.3, 6.0, 7.6, 8.5, 9.5, 10.7, 15.4, 19.8, 29.0, 32.8])
+  interp_atten = interp1d(freq_MHz, attenuation_dB, kind="linear")
+  high_freq_signals = [
+      simulate_channel(sig, cable_length=cable_length)
+      for sig in orig_signals
+  ]
+  signals = [
+      downsample(sig)
+      for sig in high_freq_signals
+  ]
+  # Apply FIR filter
+  filtered_signals = np.array([signal.lfilter(fir_taps, 1.0, sig) for sig in signals])
 
 
 
@@ -136,60 +152,46 @@ filtered_signals = np.array([signal.lfilter(fir_taps, 1.0, sig) for sig in signa
 
 
 
-# manual filter
-def manual_filter(taps, sig):
-  taps = np.asarray(taps)
-  sig = np.asarray(sig)
-  return np.convolve(sig, taps, mode='full')[:len(sig)]
-
-def manual_filter_q(taps, sig):
-  taps = np.asarray(taps)
-  sig = np.asarray(sig)
-  fir_taps_q = quantize(taps)
-  sig_q = quantize(sig)
-  return manual_filter(fir_taps_q, sig_q) / 128 / 128
 
 
-def quantize(x):
-  return np.clip(np.round(x * 128), -128, 127)
 
-filtered_signals_q = np.array([manual_filter_q(fir_taps, sig) for sig in signals])
-
-special_fsig = []
-# special_fsig = [manual_filter_q(fir_taps, sig.repeat(300) + np.random.rand(len(sig)*300) * 0.1) for sig in [
-#     np.array([-1, 1]),
-#     np.array([-1, 0, 1, 0]),
-#     np.array([-2, -1.4, 0, 1.4, 2, 1.4, 0, -1.4]) / 2,
-#     np.array([-2, -1.8, -1.4, 0, 1.4, 1.8, 2, 1.8, 1.4, 0, -1.4, -1.8]) / 2,
-# ]]
-
-# Measure amplitudes after filtering (steady-state)
-orig_amplitudes = np.array([np.max(np.abs(sig)) for sig in signals])
-filtered_amplitudes = np.array([np.max(np.abs(sig[0:])) for sig in filtered_signals])
-filtered_q_amplitudes = np.array([np.max(np.abs(sig[0:])) for sig in filtered_signals_q])
-filtered_special_amplitudes = np.array([np.max(np.abs(sig[300:])) for sig in special_fsig])
-# print(filtered_special_amplitudes)
-# for i in range(len(filtered_signals)):
-#     sig = filtered_signals[i]
-#     filtered_amplitudes[i] = np.max(np.abs(sig[100:]))
-# Convert amplitudes to dB
-orig_amplitudes_dB = 20 * np.log10(orig_amplitudes)
-filtered_amplitudes_dB = 20 * np.log10(filtered_amplitudes)
-filtered_q_amplitudes_dB = 20 * np.log10(filtered_q_amplitudes)
-filtered_sepcial_amplitudes_dB = 20 * np.log10(filtered_special_amplitudes)
-
-# Plot original vs. filtered attenuations
-# plt.figure(figsize=(10, 6))
-ax = plt.subplot(122)
-ax.plot(sim_freqs, orig_amplitudes_dB,  label='Original Attenuation (dB)')
-ax.plot(sim_freqs, filtered_q_amplitudes_dB,  label='Filtered Attenuation (dB)')
-for i in range(len(filtered_sepcial_amplitudes_dB)):
-  ax.axhline(filtered_sepcial_amplitudes_dB[i], label=str(i), color=["red", "orange", "yellow", "green"][i])
-plt.title('Original vs. Filtered Signal Attenuation')
-plt.xlabel('Frequency (MHz)')
-plt.ylabel('Magnitude (dB)')
-plt.grid(True)
-plt.legend()
-plt.savefig("fir.png")
-# plt.show()
+  filtered_signals_q = np.array([manual_filter_q(fir_taps, sig) for sig in signals])
+  
+  special_fsig = []
+  # special_fsig = [manual_filter_q(fir_taps, sig.repeat(300) + np.random.rand(len(sig)*300) * 0.1) for sig in [
+  #     np.array([-1, 1]),
+  #     np.array([-1, 0, 1, 0]),
+  #     np.array([-2, -1.4, 0, 1.4, 2, 1.4, 0, -1.4]) / 2,
+  #     np.array([-2, -1.8, -1.4, 0, 1.4, 1.8, 2, 1.8, 1.4, 0, -1.4, -1.8]) / 2,
+  # ]]
+  
+  # Measure amplitudes after filtering (steady-state)
+  orig_amplitudes = np.array([np.max(np.abs(sig)) for sig in signals])
+  filtered_amplitudes = np.array([np.max(np.abs(sig[0:])) for sig in filtered_signals])
+  filtered_q_amplitudes = np.array([np.max(np.abs(sig[0:])) for sig in filtered_signals_q])
+  filtered_special_amplitudes = np.array([np.max(np.abs(sig[300:])) for sig in special_fsig])
+  # print(filtered_special_amplitudes)
+  # for i in range(len(filtered_signals)):
+  #     sig = filtered_signals[i]
+  #     filtered_amplitudes[i] = np.max(np.abs(sig[100:]))
+  # Convert amplitudes to dB
+  orig_amplitudes_dB = 20 * np.log10(orig_amplitudes)
+  filtered_amplitudes_dB = 20 * np.log10(filtered_amplitudes)
+  filtered_q_amplitudes_dB = 20 * np.log10(filtered_q_amplitudes)
+  filtered_sepcial_amplitudes_dB = 20 * np.log10(filtered_special_amplitudes)
+  
+  # Plot original vs. filtered attenuations
+  # plt.figure(figsize=(10, 6))
+  ax = plt.subplot(122)
+  ax.plot(sim_freqs, orig_amplitudes_dB,  label='Original Attenuation (dB)')
+  ax.plot(sim_freqs, filtered_q_amplitudes_dB,  label='Filtered Attenuation (dB)')
+  for i in range(len(filtered_sepcial_amplitudes_dB)):
+    ax.axhline(filtered_sepcial_amplitudes_dB[i], label=str(i), color=["red", "orange", "yellow", "green"][i])
+  plt.title('Original vs. Filtered Signal Attenuation')
+  plt.xlabel('Frequency (MHz)')
+  plt.ylabel('Magnitude (dB)')
+  plt.grid(True)
+  plt.legend()
+  plt.savefig("fir.png")
+  # plt.show()
 

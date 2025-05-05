@@ -94,7 +94,7 @@ def sweep_test():
 
             print(f"taps[{delay}][{ntaps}]\t=", ", ".join([f"{t:.3}" for t in taps]))
             print(f"ber[{delay}][{ntaps}]\t= {ber:.5f}")
-            results[delay][ntaps] = np.log2(ber) if ber else -10
+            results[delay][ntaps] = np.log10(ber) if ber else -10
 
     plt.figure(figsize=(16, 12))
     plt.imshow(results[:, min_taps:], origin='lower', cmap='viridis', aspect='auto', 
@@ -102,7 +102,7 @@ def sweep_test():
     plt.colorbar(label='Result Value')
     plt.xlabel('num taps')
     plt.ylabel('delay')
-    plt.title('Shmoo Plot of log2(BER)')
+    plt.title('Shmoo Plot of log10(BER)')
 
     nrows, ncols = results.shape
     print(nrows, ncols)
