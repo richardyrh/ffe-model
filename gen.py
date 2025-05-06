@@ -2,11 +2,11 @@ import numpy as np
 import simple
 import fir
 
-acc_width = 8
-msb = -2
+acc_width = 9
+msb = -1
 levels = np.array([-2, -1, 0, 1, 2])
-fac = 1.485 / (2 ** (acc_width - msb)) * 32 * 0.400
-levels_raw         = np.round(np.array(levels) / fac / 4) * 4
+fac = 1.485 / (2 ** (acc_width - msb)) * 32 * 0.4
+levels_raw         = np.round(np.array(levels) / fac / 1) * 1
 
 # def ffe_eval(taps, channel_rx):
 #     padded_rx = np.hstack([[0] * (len(taps) - 1), channel_rx])
@@ -15,10 +15,15 @@ levels_raw         = np.round(np.array(levels) / fac / 4) * 4
 def ffe_eval(taps, channel_rx):
     taps = np.asarray(taps, dtype=np.int16)
     channel_rx = np.asarray(channel_rx, dtype=np.int16)
+
+    def clip(x, n):
+        return np.clip(x, -(1 << (n - 1)), (1 << (n - 1)) - 1)
     
     n_taps = len(taps)
     pad = n_taps // 2
-    padded_rx = np.pad(channel_rx, (pad, pad), mode='constant')
+    # padded_rx = np.pad(channel_rx, (pad, pad), mode='constant')
+    # padded_rx = np.pad(channel_rx, (n_taps - 1, 0), mode='constant')
+    padded_rx = np.hstack([[0] * (len(taps) - 1), channel_rx])
 
     result = np.zeros_like(channel_rx, dtype=np.int32)
 
@@ -26,16 +31,16 @@ def ffe_eval(taps, channel_rx):
         acc = 0
         for j in range(n_taps):
             product = padded_rx[i + j] * taps[j]
-            quantized_product = product >> (8 + 8 - acc_width + msb)
-            acc += quantized_product
-        result[i] = np.clip(acc, -(1 << (acc_width - 1)), (1 << (acc_width - 1)) - 1)
+            quantized_product = clip(product >> (8 + 8 - acc_width + msb), acc_width - msb)
+            acc = clip(acc + quantized_product, acc_width)
+        result[i] = clip(acc, acc_width)
 
     return result.astype(np.int32)
 
 if __name__ == "__main__":
     # ----- generate some symbols -------------------------------------------------
     N_BITS = 100_000
-    rng = np.random.default_rng(seed=42)
+    rng = np.random.default_rng(seed=119)
     # rng = np.random.default_rng(seed=42)
     bits_tx = rng.integers(-2, 3, N_BITS).tolist()
 
@@ -44,7 +49,7 @@ if __name__ == "__main__":
     channel_rx = fir.simulate_channel(waveform, freq=125e6, cable_length=100)
 
     # ----- normalize tx & rx waveform to -1~1 to simulate adc --------------------
-    channel_rx = np.round((channel_rx / np.max(np.abs(channel_rx))) * 127)
+    channel_rx = np.floor((channel_rx / np.max(np.abs(channel_rx))) * 127)
 
     delay = 3
     ntaps = 7
@@ -52,7 +57,7 @@ if __name__ == "__main__":
     taps = [-6, 1, -32, 127, -32, 1, -6]
     # taps = [-0.0613, 0.0658, -0.433, 1.0, -0.433, 0.0658, -0.0614]
 
-    actual_delay       = max(0, int(ntaps // 2) - delay)
+    actual_delay       = delay
     # equalize sampled rx signal
     equalized_rx       = ffe_eval(taps, channel_rx)
     time_shifted_rx    = equalized_rx[actual_delay:]
